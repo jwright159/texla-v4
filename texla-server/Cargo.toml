@@ -1,0 +1,10 @@
+[package]
+name = "texla-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = { version = "0.15.0", default-features = false, features = [
+	"multi_threaded",
+] }
+bevy-ws-server = { path = "../bevy-ws-server" }

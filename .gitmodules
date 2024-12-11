@@ -1,0 +1,3 @@
+[submodule "bevy-ws-server"]
+	path = bevy-ws-server
+	url = https://github.com/jwright159/bevy-ws-server.git
