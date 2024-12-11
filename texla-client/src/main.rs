@@ -4,18 +4,20 @@ use std::io::{self, stdout, Write};
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 use std::time::Duration;
-use tracing::{debug, warn};
+use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tungstenite::{connect, Message};
 
 fn main() {
-    crossterm::terminal::enable_raw_mode().unwrap();
-
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(
+            EnvFilter::from_default_env().add_directive("tungstenite=warn".parse().unwrap()),
+        )
         .init();
 
-    let (mut socket, response) = connect("ws://localhost:8080/socket").expect("Can't connect");
+    crossterm::terminal::enable_raw_mode().unwrap();
+
+    let (mut socket, _) = connect("ws://localhost:8080/socket").expect("Can't connect");
     match socket.get_mut() {
         tungstenite::stream::MaybeTlsStream::Plain(stream) => {
             stream.set_nonblocking(true).unwrap();
@@ -23,16 +25,10 @@ fn main() {
         _ => warn!("Can't set nonblocking mode for TLS stream"),
     }
 
-    debug!("Connected to the server");
-    debug!("Response HTTP code: {}", response.status());
-    debug!("Response contains the following headers:");
-    for (header, _value) in response.headers() {
-        debug!("* {header}");
-    }
-
     let (tx, rx) = mpsc::channel();
+    let (other_tx, other_rx) = mpsc::channel();
 
-    thread::spawn(move || 'thread: loop {
+    thread::spawn(move || loop {
         loop {
             match rx.try_recv() {
                 Ok(msg @ Message::Text(_)) => {
@@ -49,6 +45,8 @@ fn main() {
         }
 
         loop {
+            use tungstenite::{error::ProtocolError, Error};
+
             match socket.read() {
                 Ok(Message::Text(msg)) => {
                     execute!(io::stdout(), Clear(ClearType::CurrentLine)).unwrap();
@@ -57,11 +55,16 @@ fn main() {
                 Ok(msg) => {
                     warn!("Received unsupported message type: {msg}");
                 }
-                Err(tungstenite::Error::ConnectionClosed) => {
-                    warn!("Connection closed");
-                    break 'thread;
+                Err(Error::ConnectionClosed)
+                | Err(Error::AlreadyClosed)
+                | Err(Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)) => {
+                    println!("Connection closed");
+                    other_tx
+                        .send(OtherMessage::Close)
+                        .expect("Can't send close message");
+                    return;
                 }
-                Err(tungstenite::Error::Io(e)) if e.kind() == io::ErrorKind::WouldBlock => {
+                Err(Error::Io(e)) if e.kind() == io::ErrorKind::WouldBlock => {
                     break;
                 }
                 Err(e) => {
@@ -77,6 +80,13 @@ fn main() {
         let mut input = String::new();
 
         loop {
+            match other_rx.try_recv() {
+                Ok(OtherMessage::Close) | Err(TryRecvError::Disconnected) => {
+                    return;
+                }
+                _ => {}
+            }
+
             execute!(io::stdout(), Clear(ClearType::CurrentLine)).unwrap();
             print!("\r> {input}");
             stdout().flush().unwrap();
@@ -108,4 +118,8 @@ fn main() {
             .expect("Can't send message");
         input.clear();
     }
+}
+
+enum OtherMessage {
+    Close,
 }

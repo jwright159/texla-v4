@@ -11,8 +11,6 @@ fn main() {
 }
 
 fn startup(listener: Res<WsListener>) {
-    debug!("Hello, world!");
-
     listener.listen("127.0.0.1:8080");
 }
 
@@ -21,9 +19,7 @@ fn receive_message(mut commands: Commands, connections: Query<(Entity, &WsConnec
         loop {
             match conn.receive() {
                 Ok(message) => {
-                    debug!("> {message}");
-                    conn.send(message.clone());
-                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    debug!("{} <| {}", conn.id(), message);
                     conn.send(message);
                 }
                 Err(ReceiveError::Empty) => break,
