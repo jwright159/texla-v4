@@ -3,23 +3,26 @@ use std::marker::PhantomData;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy_ws_server::{ReceiveError, WsConnection, WsListener, WsPlugin};
+use login::{RequiresLogin, RequiresNoLogin};
 use tungstenite::Message;
+
+mod login;
 
 fn main() {
     App::new()
         .add_plugins((MinimalPlugins, LogPlugin::default(), WsPlugin))
-        .add_systems(Startup, startup)
+        .add_plugins(login::LoginPlugin)
+        .add_systems(Startup, setup)
         .add_systems(
             Update,
             (
                 receive_message.before(PreprocessCommandsSet),
                 (
-                    preprocess_commands::<LoginCommand>,
                     preprocess_commands::<EchoCommand>,
                     preprocess_commands::<LookCommand>,
                 )
                     .in_set(PreprocessCommandsSet),
-                (handle_login, handle_echo, handle_look).in_set(HandleCommandsSet),
+                (handle_echo, handle_look).in_set(HandleCommandsSet),
                 clean_up_unhandled_commands.after(HandleCommandsSet),
             ),
         )
@@ -27,13 +30,9 @@ fn main() {
         .run();
 }
 
-fn startup(mut commands: Commands, listener: Res<WsListener>) {
+fn setup(mut commands: Commands, listener: Res<WsListener>) {
     listener.listen("127.0.0.1:8080");
 
-    commands.spawn((
-        CommandHandler::<LoginCommand>::new("login"),
-        RequiresNoLogin,
-    ));
     commands.spawn((CommandHandler::<EchoCommand>::new("echo"),));
     commands.spawn((CommandHandler::<LookCommand>::new("look"), RequiresLogin));
 }
@@ -77,7 +76,7 @@ fn clean_up_unhandled_commands(
     }
 }
 
-fn preprocess_commands<T: Component + Default>(
+pub fn preprocess_commands<T: Component + Default>(
     mut commands: Commands,
     handlers: Query<(
         &CommandHandler<T>,
@@ -114,20 +113,6 @@ fn preprocess_commands<T: Component + Default>(
     }
 }
 
-fn handle_login(
-    mut commands: Commands,
-    comms: Query<&Command, With<LoginCommand>>,
-    conns: Query<&WsConnection>,
-) {
-    for command in comms.iter() {
-        commands.entity(command.conn).insert(PlayerConnection {
-            object: command.conn,
-        });
-        let conn = conns.get(command.conn).unwrap();
-        conn.send(Message::Text("Successfully logged in".to_owned()));
-    }
-}
-
 fn handle_echo(comms: Query<&Command, With<EchoCommand>>, conns: Query<&WsConnection>) {
     for command in comms.iter() {
         let conn = conns.get(command.conn).unwrap();
@@ -147,6 +132,12 @@ fn handle_look(comms: Query<&Command, With<LookCommand>>, conns: Query<&WsConnec
 #[derive(Component, Debug)]
 pub struct PlayerConnection {
     pub object: Entity,
+}
+
+#[derive(Component, Debug)]
+pub struct Player {
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Component, Debug, Default)]
@@ -192,12 +183,6 @@ impl From<String> for CommandInner {
     }
 }
 
-#[derive(Component, Debug, Default)]
-pub struct RequiresLogin;
-
-#[derive(Component, Debug, Default)]
-pub struct RequiresNoLogin;
-
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PreprocessCommandsSet;
 
@@ -229,10 +214,7 @@ impl<T> Default for CommandTrigger<T> {
 }
 
 #[derive(Component, Default)]
-pub struct LoginCommand;
+struct EchoCommand;
 
 #[derive(Component, Default)]
-pub struct EchoCommand;
-
-#[derive(Component, Default)]
-pub struct LookCommand;
+struct LookCommand;
