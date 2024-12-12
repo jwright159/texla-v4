@@ -1,5 +1,5 @@
 [workspace]
-members = ["texla-server", "texla-client"]
+members = ["texla-server", "texla-client", "tests"]
 resolver = "2"
 
 # Enable max optimizations for dependencies, but not for our code:

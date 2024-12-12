@@ -1,99 +1,54 @@
+use std::io::{stdout, Write};
+use std::sync::mpsc::TryRecvError;
+use std::thread;
+use std::time::Duration;
+
+use crossterm::event::{poll, read, Event, KeyCode};
 use crossterm::execute;
 use crossterm::style::Stylize;
 use crossterm::terminal::{Clear, ClearType};
-use std::io::{self, stdout, Write};
-use std::sync::mpsc::{self, TryRecvError};
-use std::thread;
-use std::time::Duration;
-use tracing::warn;
-use tracing_subscriber::EnvFilter;
-use tungstenite::{connect, Message};
+use texla_client::{run, Output};
 
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::from_default_env().add_directive("tungstenite=warn".parse().unwrap()),
-        )
-        .init();
-
     crossterm::terminal::enable_raw_mode().unwrap();
 
-    let mut socket = loop {
-        if let Ok((socket, _response)) = connect("ws://localhost:8080/socket") {
-            break socket;
-        }
-        thread::sleep(Duration::from_secs(1));
-    };
-    match socket.get_mut() {
-        tungstenite::stream::MaybeTlsStream::Plain(stream) => {
-            stream.set_nonblocking(true).unwrap();
-        }
-        _ => warn!("Can't set nonblocking mode for TLS stream"),
-    }
+    let (ev_in_tx, ev_in_rx) = std::sync::mpsc::channel();
+    let (ev_out_tx, ev_out_rx) = std::sync::mpsc::channel();
+    let (stopped_tx, stopped_rx) = std::sync::mpsc::channel();
 
-    let (tx, rx) = mpsc::channel();
-    let (other_tx, other_rx) = mpsc::channel();
-
-    thread::spawn(move || loop {
-        loop {
-            match rx.try_recv() {
-                Ok(msg @ Message::Text(_)) => {
-                    socket.send(msg).expect("Can't send message");
-                }
-                Ok(Message::Close(_)) | Err(TryRecvError::Disconnected) => {
-                    socket.close(None).expect("Can't close");
-                }
-                Ok(msg) => {
-                    warn!("Sent unsupported message type: {msg}");
-                }
-                Err(TryRecvError::Empty) => break,
-            }
-        }
-
-        loop {
-            use tungstenite::{error::ProtocolError, Error};
-
-            match socket.read() {
-                Ok(Message::Text(msg)) => {
-                    execute!(io::stdout(), Clear(ClearType::CurrentLine)).unwrap();
-                    println!("\r{msg}");
-                }
-                Ok(msg) => {
-                    warn!("Received unsupported message type: {msg}");
-                }
-                Err(Error::ConnectionClosed)
-                | Err(Error::AlreadyClosed)
-                | Err(Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)) => {
-                    println!("Connection closed");
-                    other_tx
-                        .send(OtherMessage::Close)
-                        .expect("Can't send close message");
-                    return;
-                }
-                Err(Error::Io(e)) if e.kind() == io::ErrorKind::WouldBlock => {
-                    break;
-                }
-                Err(e) => {
-                    warn!("Error: {e}");
-                    socket.close(None).expect("Can't close");
-                }
-            }
-        }
+    thread::spawn(move || {
+        run(ev_in_rx, ev_out_tx);
+        stopped_tx.send(()).unwrap();
     });
 
-    loop {
-        use crossterm::event::{poll, read, Event, KeyCode};
+    'main: loop {
         let mut input = String::new();
 
         loop {
-            match other_rx.try_recv() {
-                Ok(OtherMessage::Close) | Err(TryRecvError::Disconnected) => {
-                    return;
+            loop {
+                match ev_out_rx.try_recv() {
+                    Ok(msg) => match msg {
+                        Output::Text(msg) => {
+                            execute!(stdout(), Clear(ClearType::CurrentLine)).unwrap();
+                            println!("\r{msg}");
+                        }
+                        Output::Warning(msg) => {
+                            execute!(stdout(), Clear(ClearType::CurrentLine)).unwrap();
+                            println!("\r{}", msg.yellow());
+                        }
+                    },
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        break 'main;
+                    }
                 }
-                _ => {}
             }
 
-            execute!(io::stdout(), Clear(ClearType::CurrentLine)).unwrap();
+            if stopped_rx.try_recv().is_ok() {
+                break 'main;
+            }
+
+            execute!(stdout(), Clear(ClearType::CurrentLine)).unwrap();
             print!("\r> {}", input.clone().dark_yellow());
             stdout().flush().unwrap();
 
@@ -109,9 +64,7 @@ fn main() {
                             input.pop();
                         }
                         KeyCode::Esc => {
-                            crossterm::terminal::disable_raw_mode().unwrap();
-                            println!();
-                            return;
+                            break 'main;
                         }
                         _ => {}
                     }
@@ -120,12 +73,10 @@ fn main() {
         }
 
         input = input.trim().to_owned();
-        tx.send(Message::Text(input.clone()))
-            .expect("Can't send message");
+        ev_in_tx.send(input.clone()).expect("Can't send message");
         input.clear();
     }
-}
 
-enum OtherMessage {
-    Close,
+    crossterm::terminal::disable_raw_mode().unwrap();
+    println!();
 }
