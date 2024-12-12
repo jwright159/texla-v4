@@ -15,7 +15,9 @@ fn connect_and_register() {
         texla_client::run(ev_in_rx, ev_out_tx);
     });
 
-    thread::sleep(std::time::Duration::from_millis(100));
+    // Give the server time to start and the client to connect
+    thread::sleep(std::time::Duration::from_millis(1000));
+
     ev_in_tx.send("register foo | bar".to_owned()).unwrap();
     thread::sleep(std::time::Duration::from_millis(100));
 
