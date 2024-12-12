@@ -8,3 +8,4 @@ bevy = { version = "0.15.0", default-features = false, features = [
 	"multi_threaded",
 ] }
 bevy-ws-server = { path = "../bevy-ws-server" }
+tungstenite = "0.20.1"

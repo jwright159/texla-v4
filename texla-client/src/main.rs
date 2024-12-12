@@ -1,4 +1,5 @@
 use crossterm::execute;
+use crossterm::style::Stylize;
 use crossterm::terminal::{Clear, ClearType};
 use std::io::{self, stdout, Write};
 use std::sync::mpsc::{self, TryRecvError};
@@ -17,7 +18,12 @@ fn main() {
 
     crossterm::terminal::enable_raw_mode().unwrap();
 
-    let (mut socket, _) = connect("ws://localhost:8080/socket").expect("Can't connect");
+    let mut socket = loop {
+        if let Ok((socket, _response)) = connect("ws://localhost:8080/socket") {
+            break socket;
+        }
+        thread::sleep(Duration::from_secs(1));
+    };
     match socket.get_mut() {
         tungstenite::stream::MaybeTlsStream::Plain(stream) => {
             stream.set_nonblocking(true).unwrap();
@@ -88,7 +94,7 @@ fn main() {
             }
 
             execute!(io::stdout(), Clear(ClearType::CurrentLine)).unwrap();
-            print!("\r> {input}");
+            print!("\r> {}", input.clone().dark_yellow());
             stdout().flush().unwrap();
 
             if poll(Duration::from_millis(50)).unwrap() {
