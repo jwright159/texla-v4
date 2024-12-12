@@ -1,6 +1,5 @@
 use bevy::prelude::*;
-use bevy_ws_server::{ReceiveError, WsConnection, WsListener};
-use tungstenite::Message;
+use bevy_ws_server::{Message, ReceiveError, WsConnection, WsListener};
 
 use crate::{Command, Connection, ConnectionMessageEvent, PreprocessCommandsSet};
 
