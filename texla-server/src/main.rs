@@ -2,73 +2,81 @@ use std::marker::PhantomData;
 
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
-use bevy_ws_server::{ReceiveError, WsConnection, WsListener, WsPlugin};
 use login::{RequiresLogin, RequiresNoLogin};
-use tungstenite::Message;
 
 mod login;
+mod ws;
 
 fn main() {
-    App::new()
-        .add_plugins((MinimalPlugins, LogPlugin::default(), WsPlugin))
-        .add_plugins(login::LoginPlugin)
+    minimal_app()
+        .add_plugins((MinimalPlugins, LogPlugin::default()))
+        .add_plugins((login::LoginPlugin, ws::WsPlugin))
         .add_systems(Startup, setup)
         .add_systems(
             Update,
             (
-                receive_message.before(PreprocessCommandsSet),
                 (
                     preprocess_commands::<EchoCommand>,
                     preprocess_commands::<LookCommand>,
                 )
                     .in_set(PreprocessCommandsSet),
                 (handle_echo, handle_look).in_set(HandleCommandsSet),
-                clean_up_unhandled_commands.after(HandleCommandsSet),
             ),
         )
-        .configure_sets(Update, PreprocessCommandsSet.before(HandleCommandsSet))
         .run();
 }
 
-fn setup(mut commands: Commands, listener: Res<WsListener>) {
-    listener.listen("127.0.0.1:8080");
+fn minimal_app() -> App {
+    let mut app = App::new();
+    app.add_systems(
+        Update,
+        (clean_up_unhandled_commands.after(HandleCommandsSet),),
+    )
+    .configure_sets(Update, PreprocessCommandsSet.before(HandleCommandsSet));
+    app
+}
 
+#[cfg(test)]
+fn test_app<const NUM_EXTRA_CONNS: usize>() -> (
+    App,
+    Entity,
+    std::sync::mpsc::Receiver<ConnectionMessageEvent>,
+    [Entity; NUM_EXTRA_CONNS],
+) {
+    let mut app = minimal_app();
+    let world = app.world_mut();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let conn = world
+        .spawn((Connection,))
+        .observe(move |trigger: Trigger<ConnectionMessageEvent>| {
+            tx.send(trigger.event().clone()).unwrap()
+        })
+        .id();
+    let conns = [0; NUM_EXTRA_CONNS].map(|_| world.spawn((Connection,)).id());
+
+    (app, conn, rx, conns)
+}
+
+fn setup(mut commands: Commands) {
     commands.spawn((CommandHandler::<EchoCommand>::new("echo"),));
     commands.spawn((CommandHandler::<LookCommand>::new("look"), RequiresLogin));
 }
 
-fn receive_message(mut commands: Commands, conns: Query<(Entity, &WsConnection)>) {
-    for (entity, conn) in conns.iter() {
-        loop {
-            match conn.receive() {
-                Ok(Message::Text(message)) => {
-                    debug!("{} <| {}", conn.id(), message);
-                    commands.spawn(Command::new(message, entity));
-                }
-                Ok(_) => {}
-                Err(ReceiveError::Empty) => break,
-                Err(ReceiveError::Closed) => {
-                    commands.entity(entity).despawn();
-                    break;
-                }
-            }
-        }
-    }
+pub fn send(commands: &mut Commands, conn: Entity, message: Result<String, String>) {
+    commands
+        .entity(conn)
+        .trigger(ConnectionMessageEvent(message));
 }
 
-fn clean_up_unhandled_commands(
-    mut commands: Commands,
-    comms: Query<(Entity, &Command)>,
-    conns: Query<&WsConnection>,
-) {
+fn clean_up_unhandled_commands(mut commands: Commands, comms: Query<(Entity, &Command)>) {
     for (entity, command) in comms.iter() {
-        let conn = conns.get(command.conn).unwrap();
         match &command.state {
             CommandState::NotHandled => {
-                conn.send(Message::Text(format!(
-                    "Unknown command: {}",
-                    command.inner.command
-                )));
+                send(
+                    &mut commands,
+                    command.conn,
+                    Err(format!("Unknown command: {}", command.inner.command)),
+                );
             }
             CommandState::Handled => {}
         }
@@ -84,7 +92,7 @@ pub fn preprocess_commands<T: Component + Default>(
         Option<&RequiresNoLogin>,
     )>,
     mut comms: Query<(Entity, &mut Command)>,
-    conns: Query<(&WsConnection, Option<&PlayerConnection>)>,
+    conns: Query<Option<&PlayerConnection>, With<Connection>>,
 ) {
     for (entity, mut command) in comms.iter_mut() {
         let Some((_, req_login, req_no_login)) = handlers
@@ -93,19 +101,25 @@ pub fn preprocess_commands<T: Component + Default>(
         else {
             continue;
         };
-        let (conn, logged_in) = conns.get(command.conn).unwrap();
+        let logged_in = conns.get(command.conn).unwrap();
 
         command.state = CommandState::Handled;
 
         if req_login.is_some() && logged_in.is_none() {
-            conn.send(Message::Text("You must be logged in to do that".to_owned()));
+            send(
+                &mut commands,
+                command.conn,
+                Err("You must be logged in to do that.".to_owned()),
+            );
             continue;
         }
 
         if req_no_login.is_some() && logged_in.is_some() {
-            conn.send(Message::Text(
-                "You must not be logged in to do that".to_owned(),
-            ));
+            send(
+                &mut commands,
+                command.conn,
+                Err("You must not be logged in to do that.".to_owned()),
+            );
             continue;
         }
 
@@ -113,21 +127,31 @@ pub fn preprocess_commands<T: Component + Default>(
     }
 }
 
-fn handle_echo(comms: Query<&Command, With<EchoCommand>>, conns: Query<&WsConnection>) {
+fn handle_echo(mut commands: Commands, comms: Query<&Command, With<EchoCommand>>) {
     for command in comms.iter() {
-        let conn = conns.get(command.conn).unwrap();
-        conn.send(Message::Text(command.inner.args.join(" ")));
+        send(
+            &mut commands,
+            command.conn,
+            Ok(command.inner.args.join("\n")),
+        );
     }
 }
 
-fn handle_look(comms: Query<&Command, With<LookCommand>>, conns: Query<&WsConnection>) {
+fn handle_look(mut commands: Commands, comms: Query<&Command, With<LookCommand>>) {
     for command in comms.iter() {
-        let conn = conns.get(command.conn).unwrap();
-        conn.send(Message::Text(
-            "You look around you... but nobody came.".to_owned(),
-        ));
+        send(
+            &mut commands,
+            command.conn,
+            Err("You look around you... but nobody came.".to_owned()),
+        );
     }
 }
+
+#[derive(Component, Debug, Default)]
+pub struct Connection;
+
+#[derive(Event, Debug, Clone)]
+pub struct ConnectionMessageEvent(pub Result<String, String>);
 
 #[derive(Component, Debug)]
 pub struct PlayerConnection {
@@ -151,7 +175,18 @@ pub struct Command {
 }
 
 impl Command {
-    pub fn new(str: String, conn: Entity) -> Self {
+    pub fn new(command: &str, args: Vec<&str>, conn: Entity) -> Self {
+        Self {
+            inner: CommandInner {
+                command: command.to_owned(),
+                args: args.into_iter().map(|s| s.to_owned()).collect(),
+            },
+            state: CommandState::NotHandled,
+            conn,
+        }
+    }
+
+    pub fn from_str(str: String, conn: Entity) -> Self {
         Self {
             inner: CommandInner::from(str),
             state: CommandState::NotHandled,

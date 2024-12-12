@@ -1,10 +1,8 @@
 use bevy::prelude::*;
-use bevy_ws_server::WsConnection;
-use tungstenite::Message;
 
 use crate::{
-    preprocess_commands, Command, CommandHandler, HandleCommandsSet, Player, PlayerConnection,
-    PreprocessCommandsSet,
+    preprocess_commands, send, Command, CommandHandler, HandleCommandsSet, Player,
+    PlayerConnection, PreprocessCommandsSet,
 };
 
 pub struct LoginPlugin;
@@ -53,16 +51,15 @@ struct LogoutCommand;
 fn handle_login(
     mut commands: Commands,
     comms: Query<&Command, With<LoginCommand>>,
-    conns: Query<&WsConnection>,
     players: Query<(Entity, &Player)>,
 ) {
     for command in comms.iter() {
-        let conn = conns.get(command.conn).unwrap();
-
         if command.inner.args.len() < 2 {
-            conn.send(Message::Text(
-                "Usage: login <username> | <password>".to_owned(),
-            ));
+            send(
+                &mut commands,
+                command.conn,
+                Err("Usage: login <username> | <password>".to_owned()),
+            );
             continue;
         }
 
@@ -73,7 +70,11 @@ fn handle_login(
             .iter()
             .find(|(_, player)| player.username == username && player.password == password)
         else {
-            conn.send(Message::Text("Invalid username or password".to_owned()));
+            send(
+                &mut commands,
+                command.conn,
+                Err("Invalid username or password.".to_owned()),
+            );
             continue;
         };
 
@@ -81,23 +82,26 @@ fn handle_login(
             object: player_entity,
         });
 
-        conn.send(Message::Text("Successfully logged in".to_owned()));
+        send(
+            &mut commands,
+            command.conn,
+            Ok("Successfully logged in.".to_owned()),
+        );
     }
 }
 
 fn handle_register(
     mut commands: Commands,
     comms: Query<&Command, With<RegisterCommand>>,
-    conns: Query<&WsConnection>,
     players: Query<(Entity, &Player)>,
 ) {
     for command in comms.iter() {
-        let conn = conns.get(command.conn).unwrap();
-
         if command.inner.args.len() < 2 {
-            conn.send(Message::Text(
-                "Usage: register <username> | <password>".to_owned(),
-            ));
+            send(
+                &mut commands,
+                command.conn,
+                Err("Usage: register <username> | <password>".to_owned()),
+            );
             continue;
         }
 
@@ -108,7 +112,11 @@ fn handle_register(
             .iter()
             .any(|(_, player)| player.username == username)
         {
-            conn.send(Message::Text("Username already taken".to_owned()));
+            send(
+                &mut commands,
+                command.conn,
+                Err("Username already taken.".to_owned()),
+            );
             continue;
         }
 
@@ -123,21 +131,22 @@ fn handle_register(
             object: player_entity,
         });
 
-        conn.send(Message::Text(
-            "Successfully registered and logged in".to_owned(),
-        ));
+        send(
+            &mut commands,
+            command.conn,
+            Ok("Successfully registered and logged in.".to_owned()),
+        );
     }
 }
 
-fn handle_logout(
-    mut commands: Commands,
-    comms: Query<&Command, With<LogoutCommand>>,
-    conns: Query<&WsConnection>,
-) {
+fn handle_logout(mut commands: Commands, comms: Query<&Command, With<LogoutCommand>>) {
     for command in comms.iter() {
-        let conn = conns.get(command.conn).unwrap();
         commands.entity(command.conn).remove::<PlayerConnection>();
-        conn.send(Message::Text("Successfully logged out".to_owned()));
+        send(
+            &mut commands,
+            command.conn,
+            Ok("Successfully logged out.".to_owned()),
+        );
     }
 }
 
@@ -146,3 +155,171 @@ pub struct RequiresLogin;
 
 #[derive(Component, Debug, Default)]
 pub struct RequiresNoLogin;
+
+#[cfg(test)]
+mod tests {
+    use crate::login::LoginPlugin;
+    use crate::Command;
+
+    #[test]
+    fn register_works() {
+        let (mut app, conn, rx, _conns) = crate::test_app::<0>();
+        app.add_plugins(LoginPlugin);
+
+        app.world_mut()
+            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.update();
+
+        assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_ok()));
+    }
+
+    #[test]
+    fn registering_with_existing_username_fails() {
+        let (mut app, conn, rx, conns) = crate::test_app::<1>();
+        app.add_plugins(LoginPlugin);
+
+        app.world_mut()
+            .spawn(Command::new("register", vec!["test", "password"], conns[0]));
+        app.update();
+        app.world_mut()
+            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.update();
+
+        assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_err()));
+    }
+
+    #[test]
+    fn registering_with_no_username_or_password_fails() {
+        let (mut app, conn, rx, _conns) = crate::test_app::<0>();
+        app.add_plugins(LoginPlugin);
+
+        app.world_mut()
+            .spawn((Command::new("register", vec![], conn),));
+        app.update();
+
+        assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_err()));
+    }
+
+    #[test]
+    fn registering_when_logged_in_fails() {
+        let (mut app, conn, rx, _conns) = crate::test_app::<0>();
+        app.add_plugins(LoginPlugin);
+
+        app.world_mut()
+            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.update();
+        rx.try_recv().unwrap();
+
+        app.world_mut()
+            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.update();
+
+        assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_err()));
+    }
+
+    #[test]
+    fn logout_works() {
+        let (mut app, conn, rx, _conns) = crate::test_app::<0>();
+        app.add_plugins(LoginPlugin);
+
+        app.world_mut()
+            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.update();
+        rx.try_recv().unwrap();
+
+        app.world_mut().spawn(Command::new("logout", vec![], conn));
+        app.update();
+
+        assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_ok()));
+    }
+
+    #[test]
+    fn logging_out_when_not_logged_in_fails() {
+        let (mut app, conn, rx, _conns) = crate::test_app::<0>();
+        app.add_plugins(LoginPlugin);
+
+        app.world_mut().spawn(Command::new("logout", vec![], conn));
+        app.update();
+
+        assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_err()));
+    }
+
+    #[test]
+    fn login_works() {
+        let (mut app, conn, rx, _conns) = crate::test_app::<0>();
+        app.add_plugins(LoginPlugin);
+
+        app.world_mut()
+            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.update();
+        rx.try_recv().unwrap();
+
+        app.world_mut().spawn(Command::new("logout", vec![], conn));
+        app.update();
+        rx.try_recv().unwrap();
+
+        app.world_mut()
+            .spawn(Command::new("login", vec!["test", "password"], conn));
+        app.update();
+
+        assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_ok()));
+    }
+
+    #[test]
+    fn logging_in_with_no_username_or_password_fails() {
+        let (mut app, conn, rx, _conns) = crate::test_app::<0>();
+        app.add_plugins(LoginPlugin);
+
+        app.world_mut()
+            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.update();
+        rx.try_recv().unwrap();
+
+        app.world_mut().spawn(Command::new("logout", vec![], conn));
+        app.update();
+        rx.try_recv().unwrap();
+
+        app.world_mut().spawn(Command::new("login", vec![], conn));
+        app.update();
+
+        assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_err()));
+    }
+
+    #[test]
+    fn logging_in_with_invalid_username_or_password_fails() {
+        let (mut app, conn, rx, _conns) = crate::test_app::<0>();
+        app.add_plugins(LoginPlugin);
+
+        app.world_mut()
+            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.update();
+        rx.try_recv().unwrap();
+
+        app.world_mut().spawn(Command::new("logout", vec![], conn));
+        app.update();
+        rx.try_recv().unwrap();
+
+        app.world_mut()
+            .spawn(Command::new("login", vec!["test", "passwor"], conn));
+        app.update();
+
+        assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_err()));
+    }
+
+    #[test]
+    fn logging_in_when_already_logged_in_fails() {
+        let (mut app, conn, rx, _conns) = crate::test_app::<0>();
+        app.add_plugins(LoginPlugin);
+
+        app.world_mut()
+            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.update();
+        rx.try_recv().unwrap();
+
+        app.world_mut()
+            .spawn(Command::new("login", vec!["test", "password"], conn));
+        app.update();
+
+        assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_err()));
+    }
+}
