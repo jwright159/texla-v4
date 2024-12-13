@@ -7,7 +7,9 @@ use crossterm::event::{poll, read, Event, KeyCode};
 use crossterm::execute;
 use crossterm::style::Stylize;
 use crossterm::terminal::{Clear, ClearType};
+use itertools::Itertools;
 use texla_client::{run, Output};
+use unicode_segmentation::UnicodeSegmentation;
 
 fn main() {
     crossterm::terminal::enable_raw_mode().unwrap();
@@ -30,11 +32,11 @@ fn main() {
                     Ok(msg) => match msg {
                         Output::Text(msg) => {
                             execute!(stdout(), Clear(ClearType::CurrentLine)).unwrap();
-                            println!("\r{}", msg.replace("\n", "\r\n"));
+                            println!("\r{}", format_output(msg));
                         }
                         Output::Warning(msg) => {
                             execute!(stdout(), Clear(ClearType::CurrentLine)).unwrap();
-                            println!("\r{}", msg.replace("\n", "\r\n").yellow());
+                            println!("\r{}", format_output(msg).yellow());
                         }
                     },
                     Err(TryRecvError::Empty) => break,
@@ -79,4 +81,48 @@ fn main() {
 
     crossterm::terminal::disable_raw_mode().unwrap();
     println!();
+}
+
+fn format_output(msg: String) -> String {
+    let width = crossterm::terminal::size().unwrap().0 as usize;
+    let mut parts = msg.split("\n").flat_map(|part| {
+        let mut part = part.to_owned();
+        let mut parts = Vec::new();
+        while part.graphemes(true).count() > width {
+            let mut index = width;
+            while index > 0
+                && !char::is_whitespace(
+                    part.graphemes(true)
+                        .nth(index)
+                        .unwrap()
+                        .chars()
+                        .next()
+                        .unwrap(),
+                )
+            {
+                index -= 1;
+            }
+            if index == 0 {
+                index = width;
+            }
+            parts.push(
+                part.graphemes(true)
+                    .take(index)
+                    .join("")
+                    .trim_end()
+                    .to_owned(),
+            );
+            part = part
+                .graphemes(true)
+                .skip(index)
+                .join("")
+                .trim_start()
+                .to_owned();
+        }
+        if !part.is_empty() {
+            parts.push(part.to_owned());
+        }
+        parts
+    });
+    parts.join("\r\n")
 }

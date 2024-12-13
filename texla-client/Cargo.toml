@@ -5,4 +5,6 @@ edition = "2021"
 
 [dependencies]
 crossterm = "0.28.1"
+itertools = "0.13.0"
 tungstenite = "0.24.0"
+unicode-segmentation = "1.12.0"
