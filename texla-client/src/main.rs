@@ -7,7 +7,7 @@ use crossterm::cursor::MoveTo;
 use crossterm::event::{poll, read, Event, KeyCode};
 use crossterm::execute;
 use crossterm::style::Stylize;
-use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen};
+use crossterm::terminal::EnterAlternateScreen;
 use itertools::Itertools;
 use texla_client::{run, Output};
 use unicode_segmentation::UnicodeSegmentation;
@@ -36,6 +36,8 @@ impl Client {
             stopped_tx.send(()).unwrap();
         });
 
+        self.draw_borders();
+
         'main: loop {
             loop {
                 match ev_out_rx.try_recv() {
@@ -59,9 +61,10 @@ impl Client {
                 break 'main;
             }
 
+            let mut resized = false;
             if poll(Duration::from_millis(50)).unwrap() {
-                if let Event::Key(event) = read().unwrap() {
-                    match event.code {
+                match read().unwrap() {
+                    Event::Key(event) => match event.code {
                         KeyCode::Char('\n') | KeyCode::Enter => {
                             self.input = self.input.trim().to_owned();
                             self.history
@@ -79,10 +82,17 @@ impl Client {
                             break 'main;
                         }
                         _ => {}
+                    },
+                    Event::Resize(_, _) => {
+                        resized = true;
                     }
+                    _ => {}
                 }
             }
 
+            if resized {
+                self.draw_borders();
+            }
             self.draw();
         }
 
@@ -90,10 +100,47 @@ impl Client {
         execute!(stdout(), crossterm::terminal::LeaveAlternateScreen).unwrap();
     }
 
+    fn draw_borders(&self) {
+        let (width, height) = crossterm::terminal::size().unwrap();
+        let mut stdout = stdout();
+
+        for x in 1..width - 1 {
+            execute!(stdout, MoveTo(x, 0)).unwrap();
+            write!(stdout, "═").unwrap();
+            execute!(stdout, MoveTo(x, height - 3)).unwrap();
+            write!(stdout, "─").unwrap();
+            execute!(stdout, MoveTo(x, height - 1)).unwrap();
+            write!(stdout, "═").unwrap();
+        }
+
+        for y in 1..height - 1 {
+            if y == height - 3 {
+                continue;
+            }
+
+            execute!(stdout, MoveTo(0, y)).unwrap();
+            write!(stdout, "║ ").unwrap();
+            execute!(stdout, MoveTo(width - 2, y)).unwrap();
+            write!(stdout, " ║").unwrap();
+        }
+
+        execute!(stdout, MoveTo(0, 0)).unwrap();
+        write!(stdout, "╔").unwrap();
+        execute!(stdout, MoveTo(width - 1, 0)).unwrap();
+        write!(stdout, "╗").unwrap();
+        execute!(stdout, MoveTo(0, height - 3)).unwrap();
+        write!(stdout, "╟").unwrap();
+        execute!(stdout, MoveTo(width - 1, height - 3)).unwrap();
+        write!(stdout, "╢").unwrap();
+        execute!(stdout, MoveTo(0, height - 1)).unwrap();
+        write!(stdout, "╚").unwrap();
+        execute!(stdout, MoveTo(width - 1, height - 1)).unwrap();
+        write!(stdout, "╝").unwrap();
+    }
+
     fn draw(&self) {
-        let size = crossterm::terminal::size().unwrap();
-        let width = size.0;
-        let height = size.1;
+        let (width, height) = crossterm::terminal::size().unwrap();
+        let mut stdout = stdout();
 
         let output_width = width - 4;
         let output_height = height - 4;
@@ -111,38 +158,6 @@ impl Client {
             })
             .take(output_height as usize)
             .collect::<Vec<_>>();
-
-        let mut stdout = stdout();
-        execute!(stdout, Clear(ClearType::All)).unwrap();
-
-        for x in 1..width - 1 {
-            execute!(stdout, MoveTo(x, 0)).unwrap();
-            write!(stdout, "─").unwrap();
-            execute!(stdout, MoveTo(x, height - 3)).unwrap();
-            write!(stdout, "─").unwrap();
-            execute!(stdout, MoveTo(x, height - 1)).unwrap();
-            write!(stdout, "─").unwrap();
-        }
-
-        for y in 1..height - 1 {
-            execute!(stdout, MoveTo(0, y)).unwrap();
-            write!(stdout, "│").unwrap();
-            execute!(stdout, MoveTo(width - 1, y)).unwrap();
-            write!(stdout, "│").unwrap();
-        }
-
-        execute!(stdout, MoveTo(0, 0)).unwrap();
-        write!(stdout, "┌").unwrap();
-        execute!(stdout, MoveTo(width - 1, 0)).unwrap();
-        write!(stdout, "┐").unwrap();
-        execute!(stdout, MoveTo(0, height - 3)).unwrap();
-        write!(stdout, "├").unwrap();
-        execute!(stdout, MoveTo(width - 1, height - 3)).unwrap();
-        write!(stdout, "┤").unwrap();
-        execute!(stdout, MoveTo(0, height - 1)).unwrap();
-        write!(stdout, "└").unwrap();
-        execute!(stdout, MoveTo(width - 1, height - 1)).unwrap();
-        write!(stdout, "┘").unwrap();
 
         for (y, line) in output.into_iter().enumerate() {
             execute!(stdout, MoveTo(2, height - 4 - y as u16)).unwrap();
@@ -194,7 +209,13 @@ impl Client {
                 if !part.is_empty() {
                     parts.push(part.to_owned());
                 }
-                parts
+                parts.into_iter().map(|part| {
+                    let mut part = part.to_owned();
+                    while part.graphemes(true).count() < width {
+                        part.push(' ');
+                    }
+                    part
+                })
             })
             .collect::<Vec<_>>()
     }
