@@ -19,7 +19,10 @@ fn main() {
 #[derive(Debug, Default)]
 struct Client {
     input: String,
-    history: Vec<String>,
+    cursor: usize,
+    output_history: Vec<String>,
+    input_history: Vec<String>,
+    input_history_index: Option<usize>,
 }
 
 impl Client {
@@ -43,10 +46,11 @@ impl Client {
                 match ev_out_rx.try_recv() {
                     Ok(msg) => match msg {
                         Output::Text(msg) => {
-                            self.history.extend(msg.split("\n").map(|s| s.to_owned()));
+                            self.output_history
+                                .extend(msg.split("\n").map(|s| s.to_owned()));
                         }
                         Output::Warning(msg) => {
-                            self.history
+                            self.output_history
                                 .extend(msg.split("\n").map(|s| s.yellow().to_string()));
                         }
                     },
@@ -67,19 +71,72 @@ impl Client {
                     Event::Key(event) => match event.code {
                         KeyCode::Char('\n') | KeyCode::Enter => {
                             self.input = self.input.trim().to_owned();
-                            self.history
+                            self.input_history.push(self.input.clone());
+                            self.output_history
                                 .push(format!("> {}", self.input.clone().dark_yellow()));
                             ev_in_tx
                                 .send(self.input.clone())
                                 .expect("Can't send message");
                             self.input.clear();
+                            self.cursor = 0;
+                            self.input_history_index = None;
                         }
-                        KeyCode::Char(c) => self.input.push(c),
+                        KeyCode::Char(c) => {
+                            self.input.insert(self.cursor, c);
+                            self.cursor += 1;
+                        }
                         KeyCode::Backspace => {
                             self.input.pop();
+                            if self.cursor > 0 {
+                                self.cursor -= 1;
+                            }
                         }
                         KeyCode::Esc => {
                             break 'main;
+                        }
+                        KeyCode::Left => {
+                            if self.cursor > 0 {
+                                self.cursor -= 1;
+                            }
+                        }
+                        KeyCode::Right => {
+                            if self.cursor < self.input.graphemes(true).count() {
+                                self.cursor += 1;
+                            }
+                        }
+                        KeyCode::Up => {
+                            if let Some(index) = self.input_history_index {
+                                if index > 0 {
+                                    self.input_history_index = Some(index - 1);
+                                }
+                            } else {
+                                self.input_history_index = Some(self.input_history.len() - 1);
+                            }
+
+                            if let Some(index) = self.input_history_index {
+                                self.input = self.input_history[index].clone();
+                                self.cursor = self.input.graphemes(true).count();
+                            } else {
+                                self.input.clear();
+                                self.cursor = 0;
+                            }
+                        }
+                        KeyCode::Down => {
+                            if let Some(index) = self.input_history_index {
+                                if index < self.input_history.len() - 1 {
+                                    self.input_history_index = Some(index + 1);
+                                } else {
+                                    self.input_history_index = None;
+                                }
+                            }
+
+                            if let Some(index) = self.input_history_index {
+                                self.input = self.input_history[index].clone();
+                                self.cursor = self.input.graphemes(true).count();
+                            } else {
+                                self.input.clear();
+                                self.cursor = 0;
+                            }
                         }
                         _ => {}
                     },
@@ -145,9 +202,12 @@ impl Client {
         let output_width = width - 4;
         let output_height = height - 4;
 
-        let input = format!("> {}", self.input.clone().dark_yellow());
+        let input = Self::pad_line(
+            format!("> {}", self.input.clone().dark_yellow()),
+            width as usize,
+        );
         let output = self
-            .history
+            .output_history
             .iter()
             .rev()
             .take(output_height as usize)
@@ -166,6 +226,8 @@ impl Client {
 
         execute!(stdout, MoveTo(2, height - 2)).unwrap();
         write!(stdout, "{}", input).unwrap();
+
+        execute!(stdout, MoveTo(4 + self.cursor as u16, height - 2)).unwrap();
 
         stdout.flush().unwrap();
     }
@@ -209,14 +271,15 @@ impl Client {
                 if !part.is_empty() {
                     parts.push(part.to_owned());
                 }
-                parts.into_iter().map(|part| {
-                    let mut part = part.to_owned();
-                    while part.graphemes(true).count() < width {
-                        part.push(' ');
-                    }
-                    part
-                })
+                parts.into_iter().map(|part| Self::pad_line(part, width))
             })
             .collect::<Vec<_>>()
+    }
+
+    fn pad_line(mut msg: String, width: usize) -> String {
+        while msg.graphemes(true).count() < width {
+            msg.push(' ');
+        }
+        msg
     }
 }
