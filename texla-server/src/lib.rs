@@ -5,35 +5,36 @@ use bevy::prelude::*;
 use bevy::utils::HashMap;
 use login::{RequiresLogin, RequiresNoLogin};
 
+mod interact;
 mod login;
+mod utils;
 mod ws;
+
+pub mod prelude {
+    pub use crate::login::{RequiresLogin, RequiresNoLogin};
+    pub use crate::{
+        preprocess_commands, send, CommandHandler, HandleCommandsSet, Object, Player,
+        PlayerCommand, PlayerConnection, PreprocessCommandsSet,
+    };
+}
 
 pub fn app() -> App {
     let mut app = minimal_app();
     app.add_plugins((MinimalPlugins, LogPlugin::default()))
-        .add_plugins((login::LoginPlugin, ws::WsPlugin))
-        .add_systems(Startup, setup)
-        .add_systems(
-            Update,
-            (
-                (
-                    preprocess_commands::<EchoCommand>,
-                    preprocess_commands::<LookCommand>,
-                )
-                    .in_set(PreprocessCommandsSet),
-                (handle_echo, handle_look).in_set(HandleCommandsSet),
-            ),
-        );
+        .add_plugins((
+            login::LoginPlugin,
+            ws::WsPlugin,
+            utils::UtilsPlugin,
+            interact::InteractPlugin,
+        ))
+        .add_systems(Startup, setup);
     app
 }
 
 fn minimal_app() -> App {
     let mut app = App::new();
-    app.add_systems(
-        Update,
-        (clean_up_unhandled_commands.after(HandleCommandsSet),),
-    )
-    .configure_sets(Update, PreprocessCommandsSet.before(HandleCommandsSet));
+    app.add_systems(Update, clean_up_unhandled_commands.after(HandleCommandsSet))
+        .configure_sets(Update, PreprocessCommandsSet.before(HandleCommandsSet));
     app
 }
 
@@ -79,9 +80,6 @@ fn setup(mut commands: Commands) {
         .id();
 
     commands.insert_resource(SpawnRoom(voidroom));
-
-    commands.spawn((CommandHandler::<EchoCommand>::new("echo"),));
-    commands.spawn((CommandHandler::<LookCommand>::new("look"), RequiresLogin));
 }
 
 pub fn send(commands: &mut Commands, conn: Entity, message: Result<String, String>) {
@@ -90,7 +88,7 @@ pub fn send(commands: &mut Commands, conn: Entity, message: Result<String, Strin
         .trigger(ConnectionMessageEvent(message));
 }
 
-fn clean_up_unhandled_commands(mut commands: Commands, comms: Query<(Entity, &Command)>) {
+fn clean_up_unhandled_commands(mut commands: Commands, comms: Query<(Entity, &PlayerCommand)>) {
     for (entity, command) in comms.iter() {
         match &command.state {
             CommandState::NotHandled => {
@@ -113,7 +111,7 @@ pub fn preprocess_commands<T: Component + Default>(
         Option<&RequiresLogin>,
         Option<&RequiresNoLogin>,
     )>,
-    mut comms: Query<(Entity, &mut Command)>,
+    mut comms: Query<(Entity, &mut PlayerCommand)>,
     conns: Query<Option<&PlayerConnection>, With<Connection>>,
 ) {
     for (entity, mut command) in comms.iter_mut() {
@@ -149,46 +147,6 @@ pub fn preprocess_commands<T: Component + Default>(
     }
 }
 
-fn handle_echo(mut commands: Commands, comms: Query<&Command, With<EchoCommand>>) {
-    for command in comms.iter() {
-        send(
-            &mut commands,
-            command.conn,
-            Ok(command.inner.args.join("\n")),
-        );
-    }
-}
-
-fn handle_look(
-    mut commands: Commands,
-    comms: Query<&Command, With<LookCommand>>,
-    conns: Query<&PlayerConnection>,
-    player_parents: Query<&Parent, With<Player>>,
-    looks: Query<LookBundle>,
-) {
-    for command in comms.iter() {
-        let conn = conns.get(command.conn).unwrap();
-        let player_parent = player_parents.get(conn.object).unwrap();
-        let parent_look = looks.get(player_parent.get()).unwrap();
-        send(&mut commands, command.conn, Ok(look(parent_look)));
-    }
-}
-
-type LookBundle<'a> = (Entity, &'a Object, Option<&'a Name>);
-
-fn look((entity, obj, name): LookBundle) -> String {
-    let name = name
-        .map(|n| n.to_string())
-        .unwrap_or(format!("{:?}", entity));
-    let description = obj.properties.get("description");
-
-    if let Some(description) = description {
-        format!("{}\n{}", name, description)
-    } else {
-        name
-    }
-}
-
 #[derive(Component, Debug, Default)]
 pub struct Connection;
 
@@ -215,13 +173,13 @@ pub struct Object {
 pub struct SpawnRoom(pub Entity);
 
 #[derive(Component, Debug)]
-pub struct Command {
+pub struct PlayerCommand {
     inner: CommandInner,
     state: CommandState,
     conn: Entity,
 }
 
-impl Command {
+impl PlayerCommand {
     pub fn new(command: &str, args: Vec<&str>, conn: Entity) -> Self {
         Self {
             inner: CommandInner {
@@ -294,9 +252,3 @@ impl<T> Default for CommandTrigger<T> {
         Self(PhantomData)
     }
 }
-
-#[derive(Component, Default)]
-struct EchoCommand;
-
-#[derive(Component, Default)]
-struct LookCommand;

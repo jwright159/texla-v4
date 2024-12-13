@@ -1,9 +1,8 @@
 use bevy::prelude::*;
 
-use crate::{
-    look, preprocess_commands, send, Command, CommandHandler, HandleCommandsSet, LookBundle,
-    Object, Player, PlayerConnection, PreprocessCommandsSet, SpawnRoom,
-};
+use crate::interact::{look, LookBundle};
+use crate::prelude::*;
+use crate::SpawnRoom;
 
 pub struct LoginPlugin;
 
@@ -50,7 +49,7 @@ struct LogoutCommand;
 
 fn handle_login(
     mut commands: Commands,
-    comms: Query<&Command, With<LoginCommand>>,
+    comms: Query<&PlayerCommand, With<LoginCommand>>,
     players: Query<(Entity, &Player)>,
 ) {
     for command in comms.iter() {
@@ -92,7 +91,7 @@ fn handle_login(
 
 fn handle_register(
     mut commands: Commands,
-    comms: Query<&Command, With<RegisterCommand>>,
+    comms: Query<&PlayerCommand, With<RegisterCommand>>,
     players: Query<(Entity, &Player)>,
     spawn_room: Res<SpawnRoom>,
     looks: Query<LookBundle>,
@@ -142,7 +141,7 @@ fn handle_register(
     }
 }
 
-fn handle_logout(mut commands: Commands, comms: Query<&Command, With<LogoutCommand>>) {
+fn handle_logout(mut commands: Commands, comms: Query<&PlayerCommand, With<LogoutCommand>>) {
     for command in comms.iter() {
         commands.entity(command.conn).remove::<PlayerConnection>();
         send(
@@ -162,15 +161,18 @@ pub struct RequiresNoLogin;
 #[cfg(test)]
 mod tests {
     use crate::login::LoginPlugin;
-    use crate::Command;
+    use crate::PlayerCommand;
 
     #[test]
     fn register_works() {
         let (mut app, conn, rx, _conns) = crate::test_app::<0>();
         app.add_plugins(LoginPlugin);
 
-        app.world_mut()
-            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.world_mut().spawn(PlayerCommand::new(
+            "register",
+            vec!["test", "password"],
+            conn,
+        ));
         app.update();
 
         assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_ok()));
@@ -181,11 +183,17 @@ mod tests {
         let (mut app, conn, rx, conns) = crate::test_app::<1>();
         app.add_plugins(LoginPlugin);
 
-        app.world_mut()
-            .spawn(Command::new("register", vec!["test", "password"], conns[0]));
+        app.world_mut().spawn(PlayerCommand::new(
+            "register",
+            vec!["test", "password"],
+            conns[0],
+        ));
         app.update();
-        app.world_mut()
-            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.world_mut().spawn(PlayerCommand::new(
+            "register",
+            vec!["test", "password"],
+            conn,
+        ));
         app.update();
 
         assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_err()));
@@ -197,7 +205,7 @@ mod tests {
         app.add_plugins(LoginPlugin);
 
         app.world_mut()
-            .spawn((Command::new("register", vec![], conn),));
+            .spawn((PlayerCommand::new("register", vec![], conn),));
         app.update();
 
         assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_err()));
@@ -208,13 +216,19 @@ mod tests {
         let (mut app, conn, rx, _conns) = crate::test_app::<0>();
         app.add_plugins(LoginPlugin);
 
-        app.world_mut()
-            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.world_mut().spawn(PlayerCommand::new(
+            "register",
+            vec!["test", "password"],
+            conn,
+        ));
         app.update();
         rx.try_recv().unwrap();
 
-        app.world_mut()
-            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.world_mut().spawn(PlayerCommand::new(
+            "register",
+            vec!["test", "password"],
+            conn,
+        ));
         app.update();
 
         assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_err()));
@@ -225,12 +239,16 @@ mod tests {
         let (mut app, conn, rx, _conns) = crate::test_app::<0>();
         app.add_plugins(LoginPlugin);
 
-        app.world_mut()
-            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.world_mut().spawn(PlayerCommand::new(
+            "register",
+            vec!["test", "password"],
+            conn,
+        ));
         app.update();
         rx.try_recv().unwrap();
 
-        app.world_mut().spawn(Command::new("logout", vec![], conn));
+        app.world_mut()
+            .spawn(PlayerCommand::new("logout", vec![], conn));
         app.update();
 
         assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_ok()));
@@ -241,7 +259,8 @@ mod tests {
         let (mut app, conn, rx, _conns) = crate::test_app::<0>();
         app.add_plugins(LoginPlugin);
 
-        app.world_mut().spawn(Command::new("logout", vec![], conn));
+        app.world_mut()
+            .spawn(PlayerCommand::new("logout", vec![], conn));
         app.update();
 
         assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_err()));
@@ -252,17 +271,21 @@ mod tests {
         let (mut app, conn, rx, _conns) = crate::test_app::<0>();
         app.add_plugins(LoginPlugin);
 
-        app.world_mut()
-            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.world_mut().spawn(PlayerCommand::new(
+            "register",
+            vec!["test", "password"],
+            conn,
+        ));
         app.update();
         rx.try_recv().unwrap();
 
-        app.world_mut().spawn(Command::new("logout", vec![], conn));
+        app.world_mut()
+            .spawn(PlayerCommand::new("logout", vec![], conn));
         app.update();
         rx.try_recv().unwrap();
 
         app.world_mut()
-            .spawn(Command::new("login", vec!["test", "password"], conn));
+            .spawn(PlayerCommand::new("login", vec!["test", "password"], conn));
         app.update();
 
         assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_ok()));
@@ -273,16 +296,21 @@ mod tests {
         let (mut app, conn, rx, _conns) = crate::test_app::<0>();
         app.add_plugins(LoginPlugin);
 
+        app.world_mut().spawn(PlayerCommand::new(
+            "register",
+            vec!["test", "password"],
+            conn,
+        ));
+        app.update();
+        rx.try_recv().unwrap();
+
         app.world_mut()
-            .spawn(Command::new("register", vec!["test", "password"], conn));
+            .spawn(PlayerCommand::new("logout", vec![], conn));
         app.update();
         rx.try_recv().unwrap();
 
-        app.world_mut().spawn(Command::new("logout", vec![], conn));
-        app.update();
-        rx.try_recv().unwrap();
-
-        app.world_mut().spawn(Command::new("login", vec![], conn));
+        app.world_mut()
+            .spawn(PlayerCommand::new("login", vec![], conn));
         app.update();
 
         assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_err()));
@@ -293,17 +321,21 @@ mod tests {
         let (mut app, conn, rx, _conns) = crate::test_app::<0>();
         app.add_plugins(LoginPlugin);
 
-        app.world_mut()
-            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.world_mut().spawn(PlayerCommand::new(
+            "register",
+            vec!["test", "password"],
+            conn,
+        ));
         app.update();
         rx.try_recv().unwrap();
 
-        app.world_mut().spawn(Command::new("logout", vec![], conn));
+        app.world_mut()
+            .spawn(PlayerCommand::new("logout", vec![], conn));
         app.update();
         rx.try_recv().unwrap();
 
         app.world_mut()
-            .spawn(Command::new("login", vec!["test", "passwor"], conn));
+            .spawn(PlayerCommand::new("login", vec!["test", "passwor"], conn));
         app.update();
 
         assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_err()));
@@ -314,13 +346,16 @@ mod tests {
         let (mut app, conn, rx, _conns) = crate::test_app::<0>();
         app.add_plugins(LoginPlugin);
 
-        app.world_mut()
-            .spawn(Command::new("register", vec!["test", "password"], conn));
+        app.world_mut().spawn(PlayerCommand::new(
+            "register",
+            vec!["test", "password"],
+            conn,
+        ));
         app.update();
         rx.try_recv().unwrap();
 
         app.world_mut()
-            .spawn(Command::new("login", vec!["test", "password"], conn));
+            .spawn(PlayerCommand::new("login", vec!["test", "password"], conn));
         app.update();
 
         assert!(rx.try_recv().is_ok_and(|msg| msg.0.is_err()));

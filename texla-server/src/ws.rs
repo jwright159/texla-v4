@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy_ws_server::{Message, ReceiveError, WsConnection, WsListener};
 
-use crate::{Command, Connection, ConnectionMessageEvent, PreprocessCommandsSet};
+use crate::{Connection, ConnectionMessageEvent, PlayerCommand, PreprocessCommandsSet};
 
 pub struct WsPlugin;
 
@@ -38,7 +38,7 @@ fn receive_message(mut commands: Commands, conns: Query<(Entity, &WsConnection)>
             match conn.receive() {
                 Ok(Message::Text(message)) => {
                     debug!("{} <| {}", conn.id(), message);
-                    commands.spawn(Command::from_str(message, entity));
+                    commands.spawn(PlayerCommand::from_str(message, entity));
                 }
                 Ok(_) => {}
                 Err(ReceiveError::Empty) => break,
