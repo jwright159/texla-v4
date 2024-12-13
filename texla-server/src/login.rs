@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
 use crate::{
-    preprocess_commands, send, Command, CommandHandler, HandleCommandsSet, Player,
-    PlayerConnection, PreprocessCommandsSet,
+    look, preprocess_commands, send, Command, CommandHandler, HandleCommandsSet, LookBundle,
+    Object, Player, PlayerConnection, PreprocessCommandsSet, SpawnRoom,
 };
 
 pub struct LoginPlugin;
@@ -94,6 +94,8 @@ fn handle_register(
     mut commands: Commands,
     comms: Query<&Command, With<RegisterCommand>>,
     players: Query<(Entity, &Player)>,
+    spawn_room: Res<SpawnRoom>,
+    looks: Query<LookBundle>,
 ) {
     for command in comms.iter() {
         if command.inner.args.len() < 2 {
@@ -121,21 +123,22 @@ fn handle_register(
         }
 
         let player_entity = commands
-            .entity(command.conn)
-            .insert(Player {
-                username: username.clone(),
-                password: password.clone(),
-            })
+            .spawn((
+                Object::default(),
+                Player {
+                    username: username.clone(),
+                    password: password.clone(),
+                },
+            ))
+            .set_parent(spawn_room.0)
             .id();
         commands.entity(command.conn).insert(PlayerConnection {
             object: player_entity,
         });
 
-        send(
-            &mut commands,
-            command.conn,
-            Ok("Successfully registered and logged in.".to_owned()),
-        );
+        let spawn_room_look = looks.get(spawn_room.0).unwrap();
+
+        send(&mut commands, command.conn, Ok(look(spawn_room_look)));
     }
 }
 

@@ -30,11 +30,11 @@ fn main() {
                     Ok(msg) => match msg {
                         Output::Text(msg) => {
                             execute!(stdout(), Clear(ClearType::CurrentLine)).unwrap();
-                            println!("\r{msg}");
+                            println!("\r{}", msg.replace("\n", "\r\n"));
                         }
                         Output::Warning(msg) => {
                             execute!(stdout(), Clear(ClearType::CurrentLine)).unwrap();
-                            println!("\r{}", msg.yellow());
+                            println!("\r{}", msg.replace("\n", "\r\n").yellow());
                         }
                     },
                     Err(TryRecvError::Empty) => break,

@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
+use bevy::utils::HashMap;
 use login::{RequiresLogin, RequiresNoLogin};
 
 mod login;
@@ -58,6 +59,27 @@ fn test_app<const NUM_EXTRA_CONNS: usize>() -> (
 }
 
 fn setup(mut commands: Commands) {
+    let mut voidroom_properties = HashMap::new();
+    voidroom_properties.insert(
+        "description".to_owned(),
+        "The dark fog of the Void obscures any details beyond a few yards. \
+		Within that radius lies a rough concrete floor, cracked and worn from \
+		the thousands that came before you. An unseen spotlight emitting from \
+		an equally unseen sky gives you the only sensory stimulation you're \
+		afforded. You'd best find your way out of here, if one even exists."
+            .to_owned(),
+    );
+    let voidroom = commands
+        .spawn((
+            Name::new("The Voidroom"),
+            Object {
+                properties: voidroom_properties,
+            },
+        ))
+        .id();
+
+    commands.insert_resource(SpawnRoom(voidroom));
+
     commands.spawn((CommandHandler::<EchoCommand>::new("echo"),));
     commands.spawn((CommandHandler::<LookCommand>::new("look"), RequiresLogin));
 }
@@ -137,13 +159,33 @@ fn handle_echo(mut commands: Commands, comms: Query<&Command, With<EchoCommand>>
     }
 }
 
-fn handle_look(mut commands: Commands, comms: Query<&Command, With<LookCommand>>) {
+fn handle_look(
+    mut commands: Commands,
+    comms: Query<&Command, With<LookCommand>>,
+    conns: Query<&PlayerConnection>,
+    player_parents: Query<&Parent, With<Player>>,
+    looks: Query<LookBundle>,
+) {
     for command in comms.iter() {
-        send(
-            &mut commands,
-            command.conn,
-            Err("You look around you... but nobody came.".to_owned()),
-        );
+        let conn = conns.get(command.conn).unwrap();
+        let player_parent = player_parents.get(conn.object).unwrap();
+        let parent_look = looks.get(player_parent.get()).unwrap();
+        send(&mut commands, command.conn, Ok(look(parent_look)));
+    }
+}
+
+type LookBundle<'a> = (Entity, &'a Object, Option<&'a Name>);
+
+fn look((entity, obj, name): LookBundle) -> String {
+    let name = name
+        .map(|n| n.to_string())
+        .unwrap_or(format!("{:?}", entity));
+    let description = obj.properties.get("description");
+
+    if let Some(description) = description {
+        format!("{}\n{}", name, description)
+    } else {
+        name
     }
 }
 
@@ -165,7 +207,12 @@ pub struct Player {
 }
 
 #[derive(Component, Debug, Default)]
-pub struct Object;
+pub struct Object {
+    pub properties: HashMap<String, String>,
+}
+
+#[derive(Resource, Debug)]
+pub struct SpawnRoom(pub Entity);
 
 #[derive(Component, Debug)]
 pub struct Command {
